@@ -1,0 +1,111 @@
+== step1_packet
+one packet, 59 bytes = 20 (IP header) + 8 (UDP header) + 31 (message)
+IP header    45 00 00 3b 00 00 00 00 40 11 7c ed c0 a8 01 17 cb 00 71 05
+  sender     c0 a8 01 17  = 192.168.1.23
+  receiver   cb 00 71 05  = 203.0.113.5
+  checksum   7c ed
+UDP header   c3 51 00 50 00 27 00 00
+message      4c 4f 47 49 4e 20 73 61 6d 20 70 61 73 73 77 6f 72 64 3d 74 75 6e 61 2d 6d 65 6c 74 2d 34 32
+as text      LOGIN sam password=tuna-melt-42
+read back:   {'src': '192.168.1.23', 'dst': '203.0.113.5', 'sport': 50001, 'dport': 80, 'ttl': 64, 'length': 59, 'payload': b'LOGIN sam password=tuna-melt-42'}
+one bit flipped in the header: bad header checksum
+== step2_network
+   laptop -> cafe    192.168.1.23:50001 -> 203.0.113.5:80  59 bytes  LOGIN sam password=tuna-melt-42
+     cafe -> site    192.0.2.44:40000 -> 203.0.113.5:80  59 bytes  LOGIN sam password=tuna-melt-42
+     site -> cafe    203.0.113.5:80 -> 192.0.2.44:40000  44 bytes  hello 192.0.2.44
+     cafe -> laptop  203.0.113.5:80 -> 192.168.1.23:50001  44 bytes  hello 192.0.2.44
+the cafe can read:
+   to 203.0.113.5:80  59 bytes  LOGIN sam password=tuna-melt-42
+the website saw a visitor from: 192.0.2.44
+the laptop got: hello 192.0.2.44
+== step3_tunnel
+   laptop -> cafe    192.168.1.23:51820 -> 198.51.100.7:51820  87 bytes  E..;....@.4.......q..Q.P.'..LOGIN sam password=t
+     cafe -> vpn     192.0.2.44:40000 -> 198.51.100.7:51820  87 bytes  E..;....@.4.......q..Q.P.'..LOGIN sam password=t
+      vpn -> site    198.51.100.7:60000 -> 203.0.113.5:80  59 bytes  LOGIN sam password=tuna-melt-42
+     site -> vpn     203.0.113.5:80 -> 198.51.100.7:60000  46 bytes  hello 198.51.100.7
+      vpn -> cafe    198.51.100.7:51820 -> 192.0.2.44:40000  74 bytes  E.......@.4...q......P.Q....hello 198.51.100.7
+     cafe -> laptop  198.51.100.7:51820 -> 192.168.1.23:51820  74 bytes  E.......@.4...q......P.Q....hello 198.51.100.7
+the outer packet is 87 bytes: the inner 59 + 28 of new headers
+the website saw a visitor from: 198.51.100.7
+the laptop got: hello 198.51.100.7
+the cafe sees the packet go to 198.51.100.7 but the inside is not locked:
+   E..;....@.4.......q..Q.P.'..LOGIN sam password=tuna-melt-42
+   it can read the inner packet too: to 203.0.113.5 - LOGIN sam password=tuna-melt-42
+== step4_keys
+toy numbers: p = 23, g = 5.  Laptop keeps 6, sends 5^6 mod 23 = 8.  Server keeps 15, sends 5^15 mod 23 = 19.
+laptop: 19^6 mod 23 = 2.   server: 8^15 mod 23 = 2.   The same number.
+a listener who saw 8 finds the laptop's secret by trying: 6 tries
+real keys (X25519), 32 bytes each:
+  laptop public key  e44b6f93f112dde02e86a334b3d0a18ff84a002badaf74f07e8790c8d27fee66
+  server public key  896a782a346dae1c9258d2b450038c67f38c056f23721f4402948ac69f46662e
+  laptop -> server key, worked out by the laptop: c9045ab18b27d2fa19e176e3 ...
+  laptop -> server key, worked out by the server: c9045ab18b27d2fa19e176e3 ...
+  both directions agree: True   the two keys differ: True
+  a private key is one number of up to 77 digits
+== step5_encrypt
+inner packet 59 bytes -> sealed 83 bytes: 8 (counter) + 59 + 16 (tag)
+before: E..;....@.4.......q..Q.P.'..LOGIN sam password=tuna-melt-42
+after:  ...........(n..0..bL..H?..Xi....6.Jy8....25..A..-.Hk:.....B..4. ..*..fn..#..i.`s..B
+after, as hex: 00 00 00 00 00 00 00 00 d0 85 f9 28 6e 1e e2 30 df 1c 62 4c b3 c6 48 3f ...
+opened with the key: True
+opened with another key: None
+flip one bit, any of the 664: accepted 0 times
+2,000 packets, plain : 256 of 256 byte values appear; the most common one is 22.04% of the bytes
+2,000 packets, sealed: 256 of 256 byte values appear; the most common one is 0.45% of the bytes
+== step6_replay
+  counter  0: accept  new
+  counter  1: accept  new
+  counter  2: accept  new
+  counter  4: accept  new
+  counter  3: accept  late, but new
+  counter  3: DROP    seen before
+  counter  1: DROP    seen before
+  counter 70: accept  new
+  counter 69: accept  late, but new
+  counter  7: accept  late, but new
+  counter  6: DROP    too old to remember
+== step7_vpn
+   laptop -> cafe    192.168.1.23:51820 -> 198.51.100.7:51820  119 bytes  ...................(n..0..bL..H?..Xi....6.Jy8...
+     cafe -> vpn     192.0.2.44:40000 -> 198.51.100.7:51820  119 bytes  ...................(n..0..bL..H?..Xi....6.Jy8...
+      vpn -> site    198.51.100.7:60000 -> 203.0.113.5:80  59 bytes  LOGIN sam password=tuna-melt-42
+     site -> vpn     203.0.113.5:80 -> 198.51.100.7:60000  46 bytes  hello 198.51.100.7
+      vpn -> cafe    198.51.100.7:51820 -> 192.0.2.44:40000  106 bytes  ................X.D{2|..~:......Y..k.H'.x ._g#..
+     cafe -> laptop  198.51.100.7:51820 -> 192.168.1.23:51820  106 bytes  ................X.D{2|..~:......Y..k.H'.x ._g#..
+on the Wi-Fi: 119 bytes = 20 + 8 (outer headers) + 16 (type, number, counter) + 59 (inner) + 16 (tag)
+the laptop got: hello 198.51.100.7   the phone got: hello 198.51.100.7
+WHO SEES WHAT
+  cafe      to 198.51.100.7  message readable: False  site address inside: False
+  website   visitors from 198.51.100.7
+  vpn        10.0.0.2:50001 -> 203.0.113.5:80  59 bytes  LOGIN sam password=tuna-melt-42
+ATTACKS FROM THE CAFE
+  replay the recorded packet 3 times: the site got 0 more; {'forged': 0, 'replay': 3, 'address': 0}
+  flip one bit; invent a packet for client 9: {'forged': 1, 'replay': 3, 'address': 0}  unknown client: 1
+  the phone uses the laptop's tunnel address: answer None {'forged': 0, 'replay': 0, 'address': 1}
+  with the window switched off, the same replay: the site got 4 payments from 1
+== step8_real_socket
+one sealed datagram: 1432 bytes = 16 + 1400 + 16.  It starts: 04 00 00 00 01 00 00 00 00 00 00 00 00 00 00 00 d0 85 fc 6b
+20,000 round trips through a real UDP socket, 1,400-byte packets
+  no encryption:  0.39 s    51,251 round trips per second   20,000 came back right
+  sealed:         0.82 s    24,270 round trips per second   20,000 came back right
+  sealing and opening alone: 5.1 millionths of a second per packet, 273 MB per second
+  extra bytes per packet: 60 of 1460 on the wire = 4.1%
+== exercise_leak
+the laptop asks for the address: bank.example is at 203.0.113.5
+the laptop logs in: hello 198.51.100.7
+everything the cafe carried for the laptop:
+   192.168.1.23:50001 -> 203.0.113.53:53  50 bytes  where is bank.example?
+   203.0.113.53:53 -> 192.0.2.44:40000  58 bytes  bank.example is at 203.0.113.5
+   192.168.1.23:51820 -> 198.51.100.7:51820  119 bytes  ...................(n..0..bL..H?..Xi....6.Jy8...
+   198.51.100.7:51820 -> 192.0.2.44:40001  106 bytes  ................X.D{2|..~:......Y..k.H'.x ._g#..
+the name server was asked by: 192.0.2.44
+packets that skipped the tunnel: 1
+== exercise_leak fixed
+the laptop asks for the address: bank.example is at 203.0.113.5
+the laptop logs in: hello 198.51.100.7
+everything the cafe carried for the laptop:
+   192.168.1.23:51820 -> 198.51.100.7:51820  110 bytes  ...................!n..0..bc..H?..XY....6.Jy.#..
+   198.51.100.7:51820 -> 192.0.2.44:40000  118 bytes  ................X.Do2|..~:......Y..k.-'.x.._m'..
+   192.168.1.23:51820 -> 198.51.100.7:51820  119 bytes  ................7k..........X.>/.`....D.F..>..u.
+   198.51.100.7:51820 -> 192.0.2.44:40000  106 bytes  ...................%t.._...N.....7!j.-?..>.,c...
+the name server was asked by: 198.51.100.7
+packets that skipped the tunnel: 0
